@@ -47,6 +47,15 @@ button,textarea,input{font:inherit;color:inherit}
 .ghost{background:transparent;border:1px solid #2c2452;border-radius:14px;padding:13px 18px;font-weight:700}
 video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
 .erro{color:#ffb4b4}
+.lista{display:flex;flex-direction:column;gap:10px}
+.item{display:flex;align-items:center;gap:10px;border:1px solid #2c2452;background:#17122e;border-radius:16px;padding:12px 12px 12px 16px}
+.item .info{flex:1;min-width:0;text-align:left;background:none;border:0;padding:0}
+.item b{display:block;font-size:17px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item small{display:block;color:var(--dim);font-size:13px;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .mini{min-width:40px;height:40px;border-radius:12px;border:1px solid #2c2452;background:#0d0a1f;font-size:16px}
+.item.atual{border-color:var(--accent)}
+.vazio{color:var(--dim);text-align:center;padding:24px 0}
+input.tit{width:100%;border-radius:14px;border:1px solid #2c2452;background:#17122e;padding:13px 14px;font-size:18px;font-weight:700}
 [hidden]{display:none!important}
 @media (prefers-reduced-motion:reduce){#recdot i{animation:none}}
 </style>
@@ -60,7 +69,7 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
 
 <div id="bar">
   <div class="side">
-    <button class="btn" id="bEdit" aria-label="Editar roteiro">✎</button>
+    <button class="btn" id="bEdit" aria-label="Meus roteiros">☰</button>
     <button class="btn" id="bFlip" aria-label="Trocar câmera">⟲</button>
   </div>
   <button id="rec" aria-label="Gravar"><span></span></button>
@@ -78,15 +87,25 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
   <p>Dica: no iPhone, toque em Compartilhar → "Adicionar à Tela de Início" para abrir como app.</p>
 </section>
 
+<section class="sheet" id="lib" hidden>
+  <h2>Meus roteiros</h2>
+  <p>Toque num roteiro para gravar com ele. Tudo fica salvo só neste celular.</p>
+  <button class="primary" id="bNovo">+ Novo roteiro</button>
+  <div class="lista" id="lista"></div>
+  <button class="ghost" id="bLibClose">Voltar para a câmera</button>
+</section>
+
 <section class="sheet" id="editor" hidden>
-  <h2>Roteiro</h2>
-  <p>Escreva ou cole o texto. Entre colchetes vira lembrete pequeno, que você não lê em voz alta: [pausa], [sorriso].</p>
-  <div class="row" id="saved"></div>
-  <textarea id="txt" spellcheck="true" aria-label="Texto do roteiro"></textarea>
+  <h2 id="edTitulo">Novo roteiro</h2>
+  <input class="tit" id="titulo" placeholder="Título (ex.: Reels WhatsApp)" aria-label="Título do roteiro">
+  <p>Entre colchetes vira lembrete pequeno, que você não lê em voz alta: [pausa], [sorriso].</p>
+  <textarea id="txt" spellcheck="true" aria-label="Texto do roteiro" placeholder="Cole ou escreva o texto aqui"></textarea>
+  <p id="edInfo"></p>
   <div class="row">
-    <button class="primary" id="bUse">Usar este texto</button>
-    <button class="ghost" id="bSave">Salvar como…</button>
-    <button class="ghost" id="bClose">Fechar</button>
+    <button class="primary" id="bSalvar">Salvar e gravar</button>
+    <button class="ghost" id="bSoSalvar">Só salvar</button>
+    <button class="ghost" id="bExcluir">Excluir</button>
+    <button class="ghost" id="bCancel">Cancelar</button>
   </div>
 </section>
 
@@ -123,12 +142,24 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
               set(k, v) { try { localStorage.setItem("tg-" + k, JSON.stringify(v)); } catch {} } };
   const EXEMPLO = "[olhando para a lente · sorriso leve]\nOi, eu sou o Junior, da GerenciaTech.\n[pausa]\nHoje eu vou te mostrar uma coisa rápida que muda o dia a dia de quem tem empresa.\n[pausa]\nVocê pode controlar o sistema inteiro pelo WhatsApp: pedir um relatório, ver quanto vendeu hoje e até emitir a nota fiscal, numa mensagem.\n[sorriso]\nQuer ver funcionando? O link tá na bio.";
   let cfg = Object.assign({ speed: 4, fs: 30, band: 34, mirror: false, count: true, q: 1080, facing: "user", audio: "natural", mic: "", gain: 12 }, S.get("cfg", {}));
-  let text = S.get("text", EXEMPLO), saved = S.get("saved", {});
+  let roteiros = S.get("roteiros", null);
+  if (!roteiros) {
+    roteiros = [];
+    const velho = S.get("saved", {}), txtVelho = S.get("text", null);
+    Object.entries(velho).forEach(([k, v]) => roteiros.push({ id: crypto.randomUUID?.() || String(Date.now() + Math.random()), titulo: k, texto: v, em: Date.now() }));
+    if (txtVelho && !roteiros.some((r) => r.texto === txtVelho)) roteiros.unshift({ id: String(Date.now()), titulo: "Meu roteiro", texto: txtVelho, em: Date.now() });
+    if (!roteiros.length) roteiros.push({ id: "exemplo", titulo: "Exemplo · WhatsApp", texto: EXEMPLO, em: Date.now() });
+    S.set("roteiros", roteiros);
+  }
+  let atual = S.get("atual", roteiros[0].id);
+  const roteiroAtual = () => roteiros.find((r) => r.id === atual) || roteiros[0];
+  let text = roteiroAtual()?.texto || EXEMPLO, editando = null;
   let stream = null, rec = null, chunks = [], t0 = 0, raf = 0, y = 0, rolling = false, last = 0, clockT = 0, blob = null, wake = null;
   const save = () => S.set("cfg", cfg);
   function render() {
     const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
-    $("scroll").innerHTML = text.split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => {
+    const ra = roteiroAtual();
+    $("scroll").innerHTML = (ra ? `<span class="cue">▶ ${esc(ra.titulo)}</span>` : "") + text.split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => {
       const parts = esc(l).replace(/\[([^\]]+)\]/g, '<span class="cue">$1</span>');
       return /^<span class="cue">[^<]*<\/span>$/.test(parts) ? parts : "<p>" + parts + "</p>";
     }).join("");
@@ -238,7 +269,7 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = nome; document.body.appendChild(a); a.click(); a.remove();
   }
   // eventos
-  $("bStart").onclick = async () => { try { await openCam(); $("start").hidden = true; } catch (e) { const er = $("startErr"); er.hidden = false; er.textContent = "Não consegui abrir a câmera (" + e.name + "). Libere câmera e microfone para este site nos ajustes do navegador."; } };
+  $("bStart").onclick = async () => { try { await openCam(); $("start").hidden = true; lista(); $("lib").hidden = false; } catch (e) { const er = $("startErr"); er.hidden = false; er.textContent = "Não consegui abrir a câmera (" + e.name + "). Libere câmera e microfone para este site nos ajustes do navegador."; } };
   $("rec").onclick = () => (rec && rec.state === "recording" ? stopRec() : startRec());
   $("band").onclick = () => roll(!rolling);
   let touchY = null;
@@ -259,18 +290,52 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
   $("bMirror").onclick = () => { cfg.mirror = !cfg.mirror; save(); render(); };
   $("bCount").onclick = () => { cfg.count = !cfg.count; save(); render(); };
   $("bQual").onclick = async () => { cfg.q = cfg.q === 1080 ? 2160 : cfg.q === 2160 ? 720 : 1080; save(); render(); try { await openCam(); } catch {} };
-  function savedChips() {
-    const box = $("saved"); box.innerHTML = "";
-    Object.keys(saved).forEach((k) => { const b = document.createElement("button"); b.className = "chip"; b.textContent = k; b.onclick = () => ($("txt").value = saved[k]); box.appendChild(b); });
+  const segs = (s) => Math.round(s.replace(/\[[^\]]*\]/g, "").trim().split(/\s+/).filter(Boolean).length / 2.4);
+  const fmt = (s) => s < 60 ? `≈ ${s} s` : `≈ ${Math.floor(s / 60)} min ${String(s % 60).padStart(2, "0")} s`;
+  function lista() {
+    const box = $("lista"); box.innerHTML = "";
+    if (!roteiros.length) { box.innerHTML = '<p class="vazio">Nenhum roteiro ainda. Toque em "+ Novo roteiro".</p>'; return; }
+    roteiros.slice().sort((a, b) => b.em - a.em).forEach((r) => {
+      const it = document.createElement("div"); it.className = "item" + (r.id === atual ? " atual" : "");
+      const info = document.createElement("button"); info.className = "info";
+      const prev = r.texto.replace(/\[[^\]]*\]/g, "").replace(/\s+/g, " ").trim().slice(0, 60);
+      info.innerHTML = `<b></b><small></small>`; info.querySelector("b").textContent = r.titulo; info.querySelector("small").textContent = fmt(segs(r.texto)) + " · " + prev;
+      info.onclick = () => { usar(r.id); $("lib").hidden = true; };
+      const ed = document.createElement("button"); ed.className = "mini"; ed.textContent = "✎"; ed.setAttribute("aria-label", "Editar " + r.titulo); ed.onclick = () => abrirEditor(r.id);
+      const dup = document.createElement("button"); dup.className = "mini"; dup.textContent = "⧉"; dup.setAttribute("aria-label", "Duplicar " + r.titulo);
+      dup.onclick = () => { const n = { id: String(Date.now()), titulo: r.titulo + " (cópia)", texto: r.texto, em: Date.now() }; roteiros.push(n); S.set("roteiros", roteiros); lista(); };
+      it.append(info, ed, dup); box.appendChild(it);
+    });
   }
-  $("bEdit").onclick = () => { $("txt").value = text; savedChips(); $("editor").hidden = false; };
-  $("bClose").onclick = () => ($("editor").hidden = true);
-  $("bUse").onclick = () => { text = $("txt").value; S.set("text", text); setY(0); render(); $("editor").hidden = true; };
-  $("bSave").onclick = () => {
-    const btn = $("bSave");
-    if (!btn.dataset.ask) { btn.dataset.ask = 1; btn.textContent = "Toque de novo para salvar"; setTimeout(() => { btn.textContent = "Salvar como…"; delete btn.dataset.ask; }, 2500); return; }
-    const nome = ($("txt").value.split("\n").find((l) => l.trim() && !l.trim().startsWith("[")) || "Roteiro").slice(0, 28);
-    saved[nome] = $("txt").value; S.set("saved", saved); savedChips(); btn.textContent = "Salvo"; delete btn.dataset.ask;
+  function usar(id) { atual = id; S.set("atual", id); text = roteiroAtual().texto; setY(0); render(); }
+  function abrirEditor(id) {
+    editando = id; const r = roteiros.find((x) => x.id === id);
+    $("edTitulo").textContent = r ? "Editar roteiro" : "Novo roteiro";
+    $("titulo").value = r ? r.titulo : ""; $("txt").value = r ? r.texto : "";
+    $("bExcluir").hidden = !r; $("bExcluir").textContent = "Excluir"; delete $("bExcluir").dataset.ask;
+    info(); $("editor").hidden = false;
+  }
+  function info() { $("edInfo").textContent = "Tempo de leitura: " + fmt(segs($("txt").value || "")); }
+  $("txt").addEventListener("input", info);
+  function salvar() {
+    const texto = $("txt").value.trim(); if (!texto) { $("txt").focus(); return null; }
+    const titulo = $("titulo").value.trim() || (texto.split("\n").find((l) => l.trim() && !l.trim().startsWith("[")) || "Roteiro").slice(0, 40);
+    let r = roteiros.find((x) => x.id === editando);
+    if (r) Object.assign(r, { titulo, texto, em: Date.now() });
+    else { r = { id: String(Date.now()), titulo, texto, em: Date.now() }; roteiros.push(r); }
+    S.set("roteiros", roteiros); lista(); return r;
+  }
+  $("bEdit").onclick = () => { lista(); $("lib").hidden = false; };
+  $("bLibClose").onclick = () => ($("lib").hidden = true);
+  $("bNovo").onclick = () => abrirEditor(null);
+  $("bSoSalvar").onclick = () => { if (salvar()) $("editor").hidden = true; };
+  $("bSalvar").onclick = () => { const r = salvar(); if (r) { usar(r.id); $("editor").hidden = true; $("lib").hidden = true; } };
+  $("bCancel").onclick = () => ($("editor").hidden = true);
+  $("bExcluir").onclick = () => {
+    const b = $("bExcluir");
+    if (!b.dataset.ask) { b.dataset.ask = 1; b.textContent = "Toque de novo para excluir"; return; }
+    roteiros = roteiros.filter((x) => x.id !== editando); if (!roteiros.length) roteiros.push({ id: "exemplo", titulo: "Exemplo · WhatsApp", texto: EXEMPLO, em: Date.now() });
+    S.set("roteiros", roteiros); if (atual === editando) usar(roteiros[0].id); $("editor").hidden = true; lista();
   };
   $("bShare").onclick = share;
   $("bAgain").onclick = () => { $("result").hidden = true; setY(0); };
