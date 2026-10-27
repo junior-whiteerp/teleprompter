@@ -41,6 +41,7 @@ button,textarea,input{font:inherit;color:inherit}
 .sheet p{margin:0;color:var(--dim);font-size:15px;line-height:1.45}
 .sheet textarea{width:100%;min-height:42vh;border-radius:14px;border:1px solid #2c2452;background:#17122e;padding:14px;font-size:17px;line-height:1.5}
 .row{display:flex;gap:8px;flex-wrap:wrap}
+.chip.sel{border-color:var(--accent);color:#fff}
 .chip{border:1px solid #2c2452;background:#17122e;border-radius:999px;padding:9px 14px;font-weight:700;font-size:14px}
 .primary{background:linear-gradient(90deg,var(--accent),var(--accent2));border:0;border-radius:14px;padding:14px 18px;font-weight:800;font-size:17px;color:#fff}
 .ghost{background:transparent;border:1px solid #2c2452;border-radius:14px;padding:13px 18px;font-weight:700}
@@ -54,6 +55,7 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
 <video id="cam" playsinline autoplay muted></video>
 <div id="band"><div id="scroll"></div></div>
 <div id="count" hidden></div>
+<div id="lvlmini" style="position:fixed;left:16px;top:calc(var(--bandH,34vh) + 14px);width:70px;height:8px;border-radius:4px;background:rgba(0,0,0,.5);overflow:hidden"><div id="lvl2" style="height:100%;width:0;background:#3ccf91"></div></div>
 <div id="recdot" hidden><i></i><span id="clock">0:00</span></div>
 
 <div id="bar">
@@ -92,6 +94,13 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
   <h2>Ajustes</h2>
   <div class="row"><span>Letra</span><button class="chip" id="fsM">A−</button><span class="val" id="vFs">30</span><button class="chip" id="fsP">A+</button></div>
   <div class="row"><span>Altura da faixa</span><button class="chip" id="bhM">−</button><span class="val" id="vBh">34</span><button class="chip" id="bhP">+</button></div>
+  <div class="row"><span>Microfone</span></div>
+  <div class="row" id="mics"></div>
+  <p id="micInfo"></p>
+  <div class="row"><span>Volume</span><button class="chip" id="gM">−</button><span class="val" id="vGain">+12 dB</span><button class="chip" id="gP">+</button></div>
+  <div class="row"><button class="chip" id="bAudio">Áudio: voz natural</button></div>
+  <p>Fale no seu tom normal e veja a barra: verde é o ponto certo. Se ficar roxa (baixo), aumente o volume; se ficar vermelha, diminua.</p>
+  <div style="height:10px;border-radius:5px;background:#2c2452;overflow:hidden"><div id="lvl" style="height:100%;width:0"></div></div>
   <div class="row"><button class="chip" id="bMirror">Espelhar texto: não</button><button class="chip" id="bCount">Contagem 3 s: sim</button><button class="chip" id="bQual">Qualidade: 1080p</button></div>
   <div class="row"><button class="primary" id="bMoreClose">Pronto</button></div>
 </section>
@@ -113,7 +122,7 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
   const S = { get(k, d) { try { const v = localStorage.getItem("tg-" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
               set(k, v) { try { localStorage.setItem("tg-" + k, JSON.stringify(v)); } catch {} } };
   const EXEMPLO = "[olhando para a lente · sorriso leve]\nOi, eu sou o Junior, da GerenciaTech.\n[pausa]\nHoje eu vou te mostrar uma coisa rápida que muda o dia a dia de quem tem empresa.\n[pausa]\nVocê pode controlar o sistema inteiro pelo WhatsApp: pedir um relatório, ver quanto vendeu hoje e até emitir a nota fiscal, numa mensagem.\n[sorriso]\nQuer ver funcionando? O link tá na bio.";
-  let cfg = Object.assign({ speed: 4, fs: 30, band: 34, mirror: false, count: true, q: 1080, facing: "user" }, S.get("cfg", {}));
+  let cfg = Object.assign({ speed: 4, fs: 30, band: 34, mirror: false, count: true, q: 1080, facing: "user", audio: "natural", mic: "", gain: 12 }, S.get("cfg", {}));
   let text = S.get("text", EXEMPLO), saved = S.get("saved", {});
   let stream = null, rec = null, chunks = [], t0 = 0, raf = 0, y = 0, rolling = false, last = 0, clockT = 0, blob = null, wake = null;
   const save = () => S.set("cfg", cfg);
@@ -131,6 +140,9 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
     $("bMirror").textContent = "Espelhar texto: " + (cfg.mirror ? "sim" : "não");
     $("bCount").textContent = "Contagem 3 s: " + (cfg.count ? "sim" : "não");
     $("bQual").textContent = "Qualidade: " + (cfg.q === 2160 ? "4K" : cfg.q + "p");
+    $("vGain").textContent = (cfg.gain > 0 ? "+" : "") + cfg.gain + " dB";
+    if (gainNode) gainNode.gain.value = Math.pow(10, cfg.gain / 20);
+    $("bAudio").textContent = "Áudio: " + (cfg.audio === "natural" ? "voz natural (sem filtro)" : "com redução de ruído");
     setY(y);
   }
   function setY(v) { y = Math.max(0, v); $("scroll").style.transform = `translateY(${-y}px)` + (cfg.mirror ? " scaleX(-1)" : ""); }
@@ -146,9 +158,47 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
     const h = cfg.q, w = Math.round(h * 16 / 9);
     stream = await navigator.mediaDevices.getUserMedia({
       video: { facingMode: cfg.facing, width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: 30 } },
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
+      audio: Object.assign({ sampleRate: { ideal: 48000 }, channelCount: { ideal: 1 } },
+        cfg.mic ? { deviceId: { exact: cfg.mic } } : {},
+        cfg.audio === "natural" ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+                                : { echoCancellation: true, noiseSuppression: true, autoGainControl: true })
     });
-    $("cam").srcObject = stream; render();
+    $("cam").srcObject = stream; render(); meter(); listMics();
+  }
+  let actx = null, an = null, mraf = 0, gainNode = null, recStream = null;
+  function meter() {
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 48000 });
+      actx.resume && actx.resume();
+      const src = actx.createMediaStreamSource(stream);
+      gainNode = actx.createGain(); gainNode.gain.value = Math.pow(10, cfg.gain / 20);
+      const comp = actx.createDynamicsCompressor();
+      comp.threshold.value = -24; comp.knee.value = 8; comp.ratio.value = 4; comp.attack.value = 0.004; comp.release.value = 0.25;
+      const lim = actx.createDynamicsCompressor();
+      lim.threshold.value = -3; lim.knee.value = 0; lim.ratio.value = 20; lim.attack.value = 0.001; lim.release.value = 0.08;
+      const dest = actx.createMediaStreamDestination();
+      src.connect(gainNode); gainNode.connect(comp); comp.connect(lim); lim.connect(dest);
+      an = actx.createAnalyser(); an.fftSize = 1024; lim.connect(an);
+      recStream = new MediaStream([stream.getVideoTracks()[0], dest.stream.getAudioTracks()[0]]);
+      const buf = new Float32Array(an.fftSize); cancelAnimationFrame(mraf);
+      const tick = () => { an.getFloatTimeDomainData(buf); let pk = 0; for (const v of buf) pk = Math.max(pk, Math.abs(v));
+        const db = 20 * Math.log10(pk || 1e-6), w = Math.max(0, Math.min(100, (db + 60) / 60 * 100));
+        const cor = db > -2 ? "#ff3b3b" : db > -20 ? "#3ccf91" : "#c9b8ff";
+        $("lvl").style.width = w + "%"; $("lvl").style.background = cor; $("lvl2").style.width = w + "%"; $("lvl2").style.background = cor;
+        mraf = requestAnimationFrame(tick); };
+      tick();
+    } catch (e) { recStream = null; }
+  }
+  async function listMics() {
+    try {
+      const devs = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+      const cur = stream.getAudioTracks()[0]?.getSettings().deviceId;
+      $("mics").innerHTML = "";
+      devs.forEach((d, i) => { const b = document.createElement("button"); b.className = "chip" + (d.deviceId === cur ? " sel" : "");
+        b.textContent = (d.label || "Microfone " + (i + 1)).slice(0, 34); b.onclick = async () => { cfg.mic = d.deviceId; save(); try { await openCam(); } catch {} };
+        $("mics").appendChild(b); });
+      const tr = stream.getAudioTracks()[0]; $("micInfo").textContent = tr ? "Em uso: " + tr.label : "Sem microfone";
+    } catch {}
   }
   function pickType() {
     const c = ["video/mp4;codecs=avc1,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"];
@@ -161,7 +211,8 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
       c.hidden = true;
     }
     chunks = []; const type = pickType();
-    rec = new MediaRecorder(stream, type ? { mimeType: type, videoBitsPerSecond: cfg.q >= 2160 ? 30e6 : 12e6, audioBitsPerSecond: 192000 } : undefined);
+    if (actx && actx.resume) await actx.resume();
+    rec = new MediaRecorder(recStream || stream, type ? { mimeType: type, videoBitsPerSecond: cfg.q >= 2160 ? 30e6 : 12e6, audioBitsPerSecond: 256000 } : undefined);
     rec.ondataavailable = (e) => e.data && e.data.size && chunks.push(e.data);
     rec.onstop = done;
     rec.start(1000); t0 = Date.now(); $("rec").classList.add("on"); $("recdot").hidden = false;
@@ -176,7 +227,8 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
     $("prev").src = url; $("result").hidden = false;
     const mb = (blob.size / 1048576).toFixed(1), s = Math.round((Date.now() - t0) / 1000);
     const tr = stream.getVideoTracks()[0].getSettings();
-    $("resInfo").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} · ${tr.width}×${tr.height} · ${mb} MB · ${type.split(";")[0]}`;
+    const au = stream.getAudioTracks()[0]?.getSettings() || {};
+    $("resInfo").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} · ${tr.width}×${tr.height} · ${mb} MB · ${type.split(";")[0]} · áudio ${au.sampleRate ? au.sampleRate / 1000 + " kHz" : ""} ${cfg.audio === "natural" ? "natural" : "com filtro"}`;
   }
   async function share() {
     const ext = blob.type.includes("mp4") ? "mp4" : "webm";
@@ -201,6 +253,9 @@ video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
   $("fsP").onclick = () => { cfg.fs = Math.min(64, cfg.fs + 2); save(); render(); };
   $("bhM").onclick = () => { cfg.band = Math.max(18, cfg.band - 4); save(); render(); };
   $("bhP").onclick = () => { cfg.band = Math.min(70, cfg.band + 4); save(); render(); };
+  $("gM").onclick = () => { cfg.gain = Math.max(0, cfg.gain - 3); save(); render(); };
+  $("gP").onclick = () => { cfg.gain = Math.min(30, cfg.gain + 3); save(); render(); };
+  $("bAudio").onclick = async () => { cfg.audio = cfg.audio === "natural" ? "filtro" : "natural"; save(); render(); try { await openCam(); } catch {} };
   $("bMirror").onclick = () => { cfg.mirror = !cfg.mirror; save(); render(); };
   $("bCount").onclick = () => { cfg.count = !cfg.count; save(); render(); };
   $("bQual").onclick = async () => { cfg.q = cfg.q === 1080 ? 2160 : cfg.q === 2160 ? 720 : 1080; save(); render(); try { await openCam(); } catch {} };
