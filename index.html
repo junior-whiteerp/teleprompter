@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d0a1f">
+<title>Teleprompter que grava</title>
+<style>
+/* Tela cheia: câmera ao fundo, faixa de texto no topo (perto da lente), controles embaixo. Visual único escuro. */
+:root{--bg:#0d0a1f;--fg:#f6f3ff;--dim:#b3a9d9;--accent:#d643d9;--accent2:#4d2dae;--rec:#ff3b3b;--band:rgba(10,6,28,.62);color-scheme:dark}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--fg);font-family:-apple-system,system-ui,"Segoe UI",sans-serif;overflow:hidden}
+button,textarea,input{font:inherit;color:inherit}
+#cam{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;background:#000}
+#cam.mirror{transform:scaleX(-1)}
+/* faixa de leitura */
+#band{position:fixed;left:0;right:0;top:0;height:var(--bandH,34vh);padding-top:env(safe-area-inset-top,0px);background:var(--band);overflow:hidden;-webkit-mask-image:linear-gradient(#000 80%,transparent)}
+#scroll{position:absolute;left:0;right:0;top:0;padding:calc(env(safe-area-inset-top,0px) + 8px) 18px 60vh;font-size:var(--fs,30px);line-height:1.35;font-weight:700;text-align:center;will-change:transform}
+#scroll.flip{transform:scaleX(-1)}
+#scroll .cue{display:block;font-size:.5em;font-weight:800;letter-spacing:.08em;text-transform:uppercase;color:#c9b8ff;margin:.2em 0 .5em}
+#scroll p{margin:0 0 .6em}
+/* contagem e REC */
+#count{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;font-size:40vw;font-weight:900;color:var(--accent);text-shadow:0 0 40px rgba(0,0,0,.6);pointer-events:none}
+#recdot{position:fixed;right:16px;top:calc(var(--bandH,34vh) + 10px);display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;background:rgba(0,0,0,.55);font-weight:800;font-size:15px;font-variant-numeric:tabular-nums}
+#recdot i{width:12px;height:12px;border-radius:50%;background:var(--rec);animation:pisca 1s infinite}
+@keyframes pisca{50%{opacity:.25}}
+/* barra de controles */
+#bar{position:fixed;left:0;right:0;bottom:0;padding:12px 14px calc(14px + env(safe-area-inset-bottom,0px));display:flex;align-items:center;justify-content:space-between;gap:10px;background:linear-gradient(transparent,rgba(0,0,0,.7) 40%)}
+.side{display:flex;gap:8px;align-items:center;min-width:0}
+.btn{min-width:46px;height:46px;border-radius:14px;border:1px solid rgba(255,255,255,.18);background:rgba(20,14,46,.72);display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:0 10px;font-weight:800;font-size:15px}
+.btn:active{transform:scale(.96)}
+#rec{width:76px;height:76px;border-radius:50%;border:5px solid #fff;background:transparent;padding:0;display:flex;align-items:center;justify-content:center}
+#rec span{width:56px;height:56px;border-radius:50%;background:var(--rec);transition:all .2s}
+#rec.on span{width:30px;height:30px;border-radius:8px}
+.val{min-width:1.6em;text-align:center;font-variant-numeric:tabular-nums;color:var(--dim);font-weight:800}
+/* painéis */
+.sheet{position:fixed;inset:0;background:rgba(8,5,22,.96);padding:calc(16px + env(safe-area-inset-top,0px)) 16px calc(16px + env(safe-area-inset-bottom,0px));display:flex;flex-direction:column;gap:12px;overflow-y:auto}
+.sheet h2{margin:0;font-size:22px}
+.sheet p{margin:0;color:var(--dim);font-size:15px;line-height:1.45}
+.sheet textarea{width:100%;min-height:42vh;border-radius:14px;border:1px solid #2c2452;background:#17122e;padding:14px;font-size:17px;line-height:1.5}
+.row{display:flex;gap:8px;flex-wrap:wrap}
+.chip{border:1px solid #2c2452;background:#17122e;border-radius:999px;padding:9px 14px;font-weight:700;font-size:14px}
+.primary{background:linear-gradient(90deg,var(--accent),var(--accent2));border:0;border-radius:14px;padding:14px 18px;font-weight:800;font-size:17px;color:#fff}
+.ghost{background:transparent;border:1px solid #2c2452;border-radius:14px;padding:13px 18px;font-weight:700}
+video.prev{width:100%;max-height:52vh;border-radius:14px;background:#000}
+.erro{color:#ffb4b4}
+[hidden]{display:none!important}
+@media (prefers-reduced-motion:reduce){#recdot i{animation:none}}
+</style>
+</head>
+<body>
+<video id="cam" playsinline autoplay muted></video>
+<div id="band"><div id="scroll"></div></div>
+<div id="count" hidden></div>
+<div id="recdot" hidden><i></i><span id="clock">0:00</span></div>
+
+<div id="bar">
+  <div class="side">
+    <button class="btn" id="bEdit" aria-label="Editar roteiro">✎</button>
+    <button class="btn" id="bFlip" aria-label="Trocar câmera">⟲</button>
+  </div>
+  <button id="rec" aria-label="Gravar"><span></span></button>
+  <div class="side">
+    <button class="btn" id="bSlow" aria-label="Mais devagar">−</button><span class="val" id="vSpeed">4</span><button class="btn" id="bFast" aria-label="Mais rápido">+</button>
+    <button class="btn" id="bMore" aria-label="Ajustes">⋯</button>
+  </div>
+</div>
+
+<section class="sheet" id="start">
+  <h2>Teleprompter que grava</h2>
+  <p>O texto rola no topo, perto da câmera, e a gravação sai sem o texto. Os roteiros ficam salvos só neste celular.</p>
+  <p id="startErr" class="erro" hidden></p>
+  <button class="primary" id="bStart">Abrir a câmera</button>
+  <p>Dica: no iPhone, toque em Compartilhar → "Adicionar à Tela de Início" para abrir como app.</p>
+</section>
+
+<section class="sheet" id="editor" hidden>
+  <h2>Roteiro</h2>
+  <p>Escreva ou cole o texto. Entre colchetes vira lembrete pequeno, que você não lê em voz alta: [pausa], [sorriso].</p>
+  <div class="row" id="saved"></div>
+  <textarea id="txt" spellcheck="true" aria-label="Texto do roteiro"></textarea>
+  <div class="row">
+    <button class="primary" id="bUse">Usar este texto</button>
+    <button class="ghost" id="bSave">Salvar como…</button>
+    <button class="ghost" id="bClose">Fechar</button>
+  </div>
+</section>
+
+<section class="sheet" id="more" hidden>
+  <h2>Ajustes</h2>
+  <div class="row"><span>Letra</span><button class="chip" id="fsM">A−</button><span class="val" id="vFs">30</span><button class="chip" id="fsP">A+</button></div>
+  <div class="row"><span>Altura da faixa</span><button class="chip" id="bhM">−</button><span class="val" id="vBh">34</span><button class="chip" id="bhP">+</button></div>
+  <div class="row"><button class="chip" id="bMirror">Espelhar texto: não</button><button class="chip" id="bCount">Contagem 3 s: sim</button><button class="chip" id="bQual">Qualidade: 1080p</button></div>
+  <div class="row"><button class="primary" id="bMoreClose">Pronto</button></div>
+</section>
+
+<section class="sheet" id="result" hidden>
+  <h2>Gravação pronta</h2>
+  <video class="prev" id="prev" controls playsinline></video>
+  <p id="resInfo"></p>
+  <div class="row">
+    <button class="primary" id="bShare">Salvar no celular</button>
+    <button class="ghost" id="bAgain">Gravar de novo</button>
+  </div>
+  <p>Se "Salvar" não abrir as opções, use o botão de três pontos do vídeo acima para baixar.</p>
+</section>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const S = { get(k, d) { try { const v = localStorage.getItem("tg-" + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+              set(k, v) { try { localStorage.setItem("tg-" + k, JSON.stringify(v)); } catch {} } };
+  const EXEMPLO = "[olhando para a lente · sorriso leve]\nOi, eu sou o Junior, da GerenciaTech.\n[pausa]\nHoje eu vou te mostrar uma coisa rápida que muda o dia a dia de quem tem empresa.\n[pausa]\nVocê pode controlar o sistema inteiro pelo WhatsApp: pedir um relatório, ver quanto vendeu hoje e até emitir a nota fiscal, numa mensagem.\n[sorriso]\nQuer ver funcionando? O link tá na bio.";
+  let cfg = Object.assign({ speed: 4, fs: 30, band: 34, mirror: false, count: true, q: 1080, facing: "user" }, S.get("cfg", {}));
+  let text = S.get("text", EXEMPLO), saved = S.get("saved", {});
+  let stream = null, rec = null, chunks = [], t0 = 0, raf = 0, y = 0, rolling = false, last = 0, clockT = 0, blob = null, wake = null;
+  const save = () => S.set("cfg", cfg);
+  function render() {
+    const esc = (s) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+    $("scroll").innerHTML = text.split(/\n+/).map((l) => l.trim()).filter(Boolean).map((l) => {
+      const parts = esc(l).replace(/\[([^\]]+)\]/g, '<span class="cue">$1</span>');
+      return /^<span class="cue">[^<]*<\/span>$/.test(parts) ? parts : "<p>" + parts + "</p>";
+    }).join("");
+    document.documentElement.style.setProperty("--fs", cfg.fs + "px");
+    document.documentElement.style.setProperty("--bandH", cfg.band + "vh");
+    $("scroll").classList.toggle("flip", cfg.mirror);
+    $("cam").classList.toggle("mirror", cfg.facing === "user");
+    $("vSpeed").textContent = cfg.speed; $("vFs").textContent = cfg.fs; $("vBh").textContent = cfg.band;
+    $("bMirror").textContent = "Espelhar texto: " + (cfg.mirror ? "sim" : "não");
+    $("bCount").textContent = "Contagem 3 s: " + (cfg.count ? "sim" : "não");
+    $("bQual").textContent = "Qualidade: " + (cfg.q === 2160 ? "4K" : cfg.q + "p");
+    setY(y);
+  }
+  function setY(v) { y = Math.max(0, v); $("scroll").style.transform = `translateY(${-y}px)` + (cfg.mirror ? " scaleX(-1)" : ""); }
+  const pxs = () => 10 + cfg.speed * 9;
+  function loop(t) {
+    if (!rolling) return;
+    const dt = last ? (t - last) / 1000 : 0; last = t; setY(y + pxs() * dt);
+    raf = requestAnimationFrame(loop);
+  }
+  function roll(on) { rolling = on; last = 0; cancelAnimationFrame(raf); if (on) raf = requestAnimationFrame(loop); }
+  async function openCam() {
+    if (stream) stream.getTracks().forEach((t) => t.stop());
+    const h = cfg.q, w = Math.round(h * 16 / 9);
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: cfg.facing, width: { ideal: w }, height: { ideal: h }, frameRate: { ideal: 30 } },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: true }
+    });
+    $("cam").srcObject = stream; render();
+  }
+  function pickType() {
+    const c = ["video/mp4;codecs=avc1,mp4a.40.2", "video/mp4", "video/webm;codecs=vp9,opus", "video/webm"];
+    return c.find((t) => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+  }
+  async function startRec() {
+    if (cfg.count) {
+      const c = $("count"); c.hidden = false;
+      for (const n of [3, 2, 1]) { c.textContent = n; await new Promise((r) => setTimeout(r, 1000)); }
+      c.hidden = true;
+    }
+    chunks = []; const type = pickType();
+    rec = new MediaRecorder(stream, type ? { mimeType: type, videoBitsPerSecond: cfg.q >= 2160 ? 30e6 : 12e6, audioBitsPerSecond: 192000 } : undefined);
+    rec.ondataavailable = (e) => e.data && e.data.size && chunks.push(e.data);
+    rec.onstop = done;
+    rec.start(1000); t0 = Date.now(); $("rec").classList.add("on"); $("recdot").hidden = false;
+    clockT = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); $("clock").textContent = Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0"); }, 250);
+    roll(true);
+    try { wake = await navigator.wakeLock?.request("screen"); } catch {}
+  }
+  function stopRec() { roll(false); clearInterval(clockT); $("rec").classList.remove("on"); $("recdot").hidden = true; rec && rec.state !== "inactive" && rec.stop(); try { wake && wake.release(); } catch {} }
+  function done() {
+    const type = (rec && rec.mimeType) || "video/mp4";
+    blob = new Blob(chunks, { type }); const url = URL.createObjectURL(blob);
+    $("prev").src = url; $("result").hidden = false;
+    const mb = (blob.size / 1048576).toFixed(1), s = Math.round((Date.now() - t0) / 1000);
+    const tr = stream.getVideoTracks()[0].getSettings();
+    $("resInfo").textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")} · ${tr.width}×${tr.height} · ${mb} MB · ${type.split(";")[0]}`;
+  }
+  async function share() {
+    const ext = blob.type.includes("mp4") ? "mp4" : "webm";
+    const d = new Date(), nome = `gravacao-${d.toISOString().slice(0, 16).replace(/[-:T]/g, "")}.${ext}`;
+    const file = new File([blob], nome, { type: blob.type });
+    try { if (navigator.canShare && navigator.canShare({ files: [file] })) { await navigator.share({ files: [file], title: nome }); return; } } catch (e) { if (e.name === "AbortError") return; }
+    const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = nome; document.body.appendChild(a); a.click(); a.remove();
+  }
+  // eventos
+  $("bStart").onclick = async () => { try { await openCam(); $("start").hidden = true; } catch (e) { const er = $("startErr"); er.hidden = false; er.textContent = "Não consegui abrir a câmera (" + e.name + "). Libere câmera e microfone para este site nos ajustes do navegador."; } };
+  $("rec").onclick = () => (rec && rec.state === "recording" ? stopRec() : startRec());
+  $("band").onclick = () => roll(!rolling);
+  let touchY = null;
+  $("band").addEventListener("touchstart", (e) => (touchY = e.touches[0].clientY), { passive: true });
+  $("band").addEventListener("touchmove", (e) => { if (touchY === null) return; const ny = e.touches[0].clientY; setY(y + (touchY - ny)); touchY = ny; }, { passive: true });
+  $("bSlow").onclick = () => { cfg.speed = Math.max(1, cfg.speed - 1); save(); render(); };
+  $("bFast").onclick = () => { cfg.speed = Math.min(12, cfg.speed + 1); save(); render(); };
+  $("bFlip").onclick = async () => { cfg.facing = cfg.facing === "user" ? "environment" : "user"; save(); try { await openCam(); } catch {} };
+  $("bMore").onclick = () => ($("more").hidden = false);
+  $("bMoreClose").onclick = () => ($("more").hidden = true);
+  $("fsM").onclick = () => { cfg.fs = Math.max(18, cfg.fs - 2); save(); render(); };
+  $("fsP").onclick = () => { cfg.fs = Math.min(64, cfg.fs + 2); save(); render(); };
+  $("bhM").onclick = () => { cfg.band = Math.max(18, cfg.band - 4); save(); render(); };
+  $("bhP").onclick = () => { cfg.band = Math.min(70, cfg.band + 4); save(); render(); };
+  $("bMirror").onclick = () => { cfg.mirror = !cfg.mirror; save(); render(); };
+  $("bCount").onclick = () => { cfg.count = !cfg.count; save(); render(); };
+  $("bQual").onclick = async () => { cfg.q = cfg.q === 1080 ? 2160 : cfg.q === 2160 ? 720 : 1080; save(); render(); try { await openCam(); } catch {} };
+  function savedChips() {
+    const box = $("saved"); box.innerHTML = "";
+    Object.keys(saved).forEach((k) => { const b = document.createElement("button"); b.className = "chip"; b.textContent = k; b.onclick = () => ($("txt").value = saved[k]); box.appendChild(b); });
+  }
+  $("bEdit").onclick = () => { $("txt").value = text; savedChips(); $("editor").hidden = false; };
+  $("bClose").onclick = () => ($("editor").hidden = true);
+  $("bUse").onclick = () => { text = $("txt").value; S.set("text", text); setY(0); render(); $("editor").hidden = true; };
+  $("bSave").onclick = () => {
+    const btn = $("bSave");
+    if (!btn.dataset.ask) { btn.dataset.ask = 1; btn.textContent = "Toque de novo para salvar"; setTimeout(() => { btn.textContent = "Salvar como…"; delete btn.dataset.ask; }, 2500); return; }
+    const nome = ($("txt").value.split("\n").find((l) => l.trim() && !l.trim().startsWith("[")) || "Roteiro").slice(0, 28);
+    saved[nome] = $("txt").value; S.set("saved", saved); savedChips(); btn.textContent = "Salvo"; delete btn.dataset.ask;
+  };
+  $("bShare").onclick = share;
+  $("bAgain").onclick = () => { $("result").hidden = true; setY(0); };
+  render();
+})();
+</script>
+</body>
+</html>
